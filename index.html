@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>سجل الأشخاص</title>
+<style>
+  body{font-family:Tahoma,Arial;background:#f2f2f2;margin:0;padding:16px}
+  .box{background:#fff;max-width:800px;margin:0 auto 16px;padding:18px;border-radius:12px;box-shadow:0 2px 8px #0002}
+  input,button{width:100%;padding:12px;margin:6px 0;border-radius:8px;border:1px solid #ccc;box-sizing:border-box;font-size:16px}
+  button{background:#1a73e8;color:#fff;border:none}
+  .red{background:#d93025}
+  label{font-weight:bold;display:block;margin-top:10px}
+  .card{border:1px solid #ddd;border-radius:10px;padding:12px;margin:10px 0}
+  .card img{width:120px;height:120px;object-fit:cover;border-radius:8px;margin:4px}
+  .hidden{display:none}
+  #viewer{position:fixed;inset:0;background:#000d;display:flex;align-items:center;justify-content:center}
+  #viewer img{max-width:95%;max-height:95%}
+</style>
+</head>
+<body>
+<div id="lockBox" class="box">
+  <h2 id="lockTitle">تسجيل الدخول</h2>
+  <input id="pass" type="password" placeholder="كلمة المرور">
+  <input id="pass2" type="password" placeholder="أعد كتابة كلمة المرور" class="hidden">
+  <button onclick="unlock()">دخول</button>
+  <p id="lockMsg" style="color:red"></p>
+</div>
+<div id="app" class="hidden">
+  <div class="box">
+    <button class="red" onclick="location.reload()">قفل</button>
+    <h2>إضافة شخص جديد</h2>
+    <label>الاسم الرباعي</label><input id="fullName">
+    <label>رقم الهاتف</label><input id="phone" type="tel">
+    <label>الصورة الشخصية</label><input id="photo" type="file" accept="image/*">
+    <label>صورة الهوية</label><input id="idCard" type="file" accept="image/*">
+    <label>صورة المركبة</label><input id="vehicle" type="file" accept="image/*">
+    <button id="saveBtn" onclick="addPerson()">حفظ</button>
+    <p id="saveMsg"></p>
+  </div>
+  <div class="box">
+    <h2>قائمة الأشخاص (<span id="count">0</span>)</h2>
+    <input id="search" placeholder="ابحث بالاسم أو رقم الهاتف" oninput="render()">
+    <div id="list"></div>
+  </div>
+</div>
+<div id="viewer" class="hidden" onclick="this.classList.add('hidden')"><img id="viewerImg"></div><script>
+let db, people = [];
+const isNew = !localStorage.getItem("passHash");
+if (isNew) { lockTitle.textContent = "اختر كلمة مرور للنظام"; pass2.classList.remove("hidden"); }
+
+async function hash(t) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(t));
+  return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, "0")).join("");
+}
+
+async function unlock() {
+  if (!pass.value) return;
+  const h = await hash(pass.value);
+  if (isNew) {
+    if (pass.value !== pass2.value) { lockMsg.textContent = "كلمتا المرور غير متطابقتين"; return; }
+    localStorage.setItem("passHash", h);
+  } else if (h !== localStorage.getItem("passHash")) {
+    lockMsg.textContent = "كلمة المرور غير صحيحة"; return;
+  }
+  lockBox.classList.add("hidden"); app.classList.remove("hidden"); openDB();
+}
+
+function openDB() {
+  const r = indexedDB.open("peopleDB", 1);
+  r.onupgradeneeded = () => r.result.createObjectStore("people", { keyPath: "id" });
+  r.onsuccess = () => { db = r.result; loadPeople(); };
+}
+
+function store(mode) { return db.transaction("people", mode).objectStore("people"); }
+
+function shrink(file) {
+  return new Promise(res => {
+    if (!file) return res("");
+    const img = new Image();
+    img.onload = () => {
+      const s = Math.min(1, 1200 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = img.width * s; c.height = img.height * s;
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      res(c.toDataURL("image/jpeg", 0.8));
+    };
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+async function addPerson() {
+  if (!fullName.value.trim() || !phone.value.trim()) { saveMsg.textContent = "الرجاء إدخال الاسم ورقم الهاتف"; return; }
+  saveBtn.disabled = true; saveMsg.textContent = "جاري الحفظ...";
+  const person = {
+    id: Date.now(), fullName: fullName.value.trim(), phone: phone.value.trim(),
+    photo: await shrink(photo.files[0]), idCard: await shrink(idCard.files[0]), vehicle: await shrink(vehicle.files[0])
+  };
+  store("readwrite").add(person).onsuccess = () => {
+    saveMsg.textContent = "تم الحفظ بنجاح";
+    [fullName, phone, photo, idCard, vehicle].forEach(x => x.value = "");
+    saveBtn.disabled = false; loadPeople();
+  };
+}
+
+function loadPeople() {
+  store("readonly").getAll().onsuccess = e => { people = e.target.result.sort((a, b) => b.id - a.id); render(); };
+}
+
+function show(src) { viewerImg.src = src; viewer.classList.remove("hidden"); }
+
+function render() {
+  const s = search.value.trim();
+  const f = people.filter(x => x.fullName.includes(s) || x.phone.includes(s));
+  count.textContent = people.length;
+  list.innerHTML = f.map(x => `
+    <div class="card">
+      <b>${x.fullName}</b><br>الهاتف: ${x.phone}<br>
+      ${["photo", "idCard", "vehicle"].map(k => x[k] ? `<img src="${x[k]}" onclick="show(this.src)">` : "").join("")}
+      <button class="red" onclick="removePerson(${x.id})">حذف</button>
+    </div>`).join("") || "<p>لا يوجد أشخاص</p>";
+}
+
+function removePerson(id) {
+  if (confirm("هل أنت متأكد من الحذف؟")) store("readwrite").delete(id).onsuccess = loadPeople;
+}
+</script>
+</body>
+</html>
